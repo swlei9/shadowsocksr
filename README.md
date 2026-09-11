@@ -1,168 +1,113 @@
-ShadowsocksR
-===========
+# SSR 3.2.2 一键安装包
 
-[![Build Status]][Travis CI]
+这是从秋水逸冰（Teddysun）老版 `shadowsocks-all.sh` 部署出的 SSR 3.2.2
+程序整理而成的可重复安装包，适用于 Debian 12，也兼容使用 `apt` 和 `systemd`
+的 Debian/Ubuntu 系统。
 
-A fast tunnel proxy that helps you bypass firewalls.
+程序源码已包含在包内；安装系统依赖时仍需能够访问 Debian/Ubuntu 软件源。
 
-Server
-------
+## 默认参数
 
-### Install with one click (一键安装)
+- 加密：`chacha20-ietf`
+- 协议：`auth_sha1_v4`
+- 混淆：`plain`
+- 端口：默认 `443`，安装时可以修改
+- UDP：默认关闭，安装时可以开启
+
+## 安装
+
+### 在线一键安装
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/swlei9/shadowsocksr/manyuser/install-online.sh)
 ```
-sudo su
 
-wget --no-check-certificate https://raw.githubusercontent.com/ShadowsocksR-Live/shadowsocksr/manyuser/ssr-install.sh
+如果新系统没有 `curl`，先执行：
 
-chmod +x ssr-install.sh
-
-./ssr-install.sh 2>&1 | tee ssr-install.log
-```
-To uninstall, using
-```
-./ssr-install.sh uninstall
+```bash
+apt-get update && apt-get install -y curl ca-certificates
 ```
 
-### Install
+### 下载压缩包安装
 
-Please make you as `root` account and change your working directory to the root first.
+上传压缩包到新服务器并以 root 身份执行：
 
-    sudo su
-    cd / 
+```bash
+tar -xzf ssr-offline-installer.tar.gz
+cd ssr-offline-installer
+bash install.sh
+```
 
-Debian / Ubuntu:
+安装脚本会询问客户端连接地址、端口、密码及是否开启 UDP。客户端连接地址填写
+服务器公网 IPv4 或域名，不要带 `http://`、端口或路径。密码留空时会自动生成。
 
-    apt-get install git
-    git clone https://github.com/ShadowsocksR-Live/shadowsocksr.git
+安装成功后会自动输出完整的 `ssr://` 链接，可以直接复制到支持 SSR 链接导入的客户端。
 
-CentOS:
+## 常用命令
 
-    yum install git
-    git clone https://github.com/ShadowsocksR-Live/shadowsocksr.git
+```bash
+systemctl status shadowsocks-r --no-pager
+systemctl restart shadowsocks-r
+systemctl stop shadowsocks-r
+journalctl -u shadowsocks-r -n 50 --no-pager
+ss -lntup | grep ':443'
+ssr-link
+```
 
-Windows:
+如果安装时选择了其他端口，请把最后一条命令中的 `443` 替换为实际端口。
 
-    git clone https://github.com/ShadowsocksR-Live/shadowsocksr.git
+配置文件位于：
 
-### Usage for single user on linux platform
+```text
+/etc/shadowsocks-r/config.json
+```
 
-If you clone it into "/shadowsocksr" folder, 
-please enter "/shadowsocksr" first, 
+修改 JSON 并重启服务后，执行以下命令即可重新生成链接：
 
-    cd /shadowsocksr
+```bash
+python3 -m json.tool /etc/shadowsocks-r/config.json >/dev/null
+systemctl restart shadowsocks-r
+ssr-link
+```
 
-then run:
+如果服务器公网 IP 或域名发生变化，可以临时指定新地址：
 
-    bash initcfg.sh
+```bash
+ssr-link 新公网IP或新域名
+```
 
-Now, move to "/shadowsocksr/shadowsocks", 
+`ssr://` 链接中包含经过编码但未加密的密码。不要把链接发到公开群聊、网页或公开仓库。
 
-    cd /shadowsocksr/shadowsocks
+配置文件权限为 `0640`，只有 root 和专用 `ssr` 服务账户可以读取。
 
-then run:
+## 安全说明
 
-    python server.py -p 443 -k password -m aes-128-cfb -O auth_aes128_md5 -o tls1.2_ticket_auth_compatible
+- 安装包不包含任何真实服务器密码或历史配置。
+- 已修复 Python 3.10+ 中 `collections.MutableMapping` 的兼容问题。
+- 已移除启动日志中的密码明文输出。
+- 安装完成后自动生成标准 `ssr://` 客户端链接。
+- SSR 使用独立的低权限 `ssr` 账户运行。
+- 默认关闭 UDP。仅确实需要时才同时开放 UDP 端口。
+- 不要把带有真实密码的配置文件提交到 Git 仓库。
+- SSR 3.2.2 是停止维护的旧软件，仅建议用于兼容已有客户端。
+- 安装脚本不会自动修改防火墙；请在云服务商控制台只放行实际使用的端口。
 
-Check all the options via `-h`.
+## 备份
 
-You can also use a configuration file instead (recommend), move to "/shadowsocksr" and edit the file "user-config.json" with `vi` text editor, 
+重复执行安装脚本时，如检测到旧程序、配置或服务文件，会先备份到：
 
-    vi /shadowsocksr/user-config.json
+```text
+/root/shadowsocks-r-backup-日期时间/
+```
 
-then move to "/shadowsocksr/shadowsocks" again, 
+## 来源与修改
 
-    cd /shadowsocksr/shadowsocks
+原始程序：ShadowsocksR SSRR 3.2.2（2018-05-22）。
 
-and just run:
+为现代系统加入了以下修改：
 
-    python server.py
-
-Now. Mission completed.
-
-To run in the background:
-
-    ./logrun.sh
-
-To stop:
-
-    ./stop.sh
-
-To monitor the log:
-
-    ./tail.sh
-
-### Run as an automatical service
-
-If you hope the remote host to start the shadowsocksr service automatically when the host started, please:
-
-Edit the configuration file "user-config.json" with `vi` text editor, modify it with correct parameters.
-
-    vi /shadowsocksr/user-config.json
-
-Edit `/etc/rc.local` file with `vi` editor,
-
-    vi /etc/rc.local
-
-and add the following command to the end of the `/etc/rc.local` file.
-
-    /shadowsocksr/shadowsocks/logrun.sh
-    
-If the first line of file `/etc/rc.local` is not `#!/bin/sh -e`, please add it to the first line, 
-then make `/etc/rc.local` executable using the following command:
-
-    chmod +x /etc/rc.local
-    
-Please `reboot` your linux computer and all is done.
-
-About editing `user-config.json` and `/etc/rc.local` files with `vi` text editor utility, please see [How to Use the vi Editor](https://www.washington.edu/computing/unix/vi.html).
-
-
-Client
-------
-
-* [Windows] / [macOS]
-* [Android] / [iOS]
-* [OpenWRT]
-
-Use GUI clients on your local PC/phones. Check the README of your client
-for more information.
-
-Documentation
--------------
-
-You can find all the documentation in the [Wiki].
-
-License
--------
-
-Copyright 2015 clowwindy
-
-Licensed under the Apache License, Version 2.0 (the "License"); you may
-not use this file except in compliance with the License. You may obtain
-a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-License for the specific language governing permissions and limitations
-under the License.
-
-Bugs and Issues
-----------------
-
-* [Issue Tracker]
-
-
-
-[Android]:           https://github.com/shadowsocksr/shadowsocksr-android
-[Build Status]:      https://travis-ci.org/shadowsocksr/shadowsocksr.svg?branch=manyuser
-[Debian sid]:        https://packages.debian.org/unstable/python/shadowsocks
-[iOS]:               https://github.com/shadowsocks/shadowsocks-iOS/wiki/Help
-[Issue Tracker]:     https://github.com/shadowsocksr/shadowsocksr/issues?state=open
-[OpenWRT]:           https://github.com/shadowsocks/openwrt-shadowsocks
-[macOS]:             https://github.com/shadowsocksr/ShadowsocksX-NG
-[Travis CI]:         https://travis-ci.org/shadowsocksr/shadowsocksr
-[Windows]:           https://github.com/shadowsocksr/shadowsocksr-csharp
-[Wiki]:              https://github.com/breakwa11/shadowsocks-rss/wiki
+1. Python 3.10+ `collections.abc.MutableMapping` 兼容修复；
+2. 修复旧代码的 Python `is` 字面量比较警告；
+3. 启动日志对密码进行脱敏；
+4. 新增 `udp_enabled` 配置，默认不启动 UDP 转发；
+5. 使用 systemd 和低权限服务账户运行。
