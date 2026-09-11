@@ -23,6 +23,33 @@ info() {
     echo "[信息] $*"
 }
 
+is_ipv4() {
+    local candidate=$1
+    local octet
+    local -a octets
+    [[ ${candidate} =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r -a octets <<< "${candidate}"
+    for octet in "${octets[@]}"; do
+        (( 10#${octet} <= 255 )) || return 1
+    done
+}
+
+detect_public_ipv4() {
+    local endpoint
+    local candidate
+    for endpoint in \
+        "https://api.ipify.org" \
+        "https://ipv4.icanhazip.com" \
+        "https://ifconfig.me/ip"; do
+        candidate=$(curl -4 -fsS --connect-timeout 4 --max-time 8 "${endpoint}" 2>/dev/null | tr -d '[:space:]') || true
+        if is_ipv4 "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 [[ ${EUID} -eq 0 ]] || fail "请使用 root 用户执行此脚本。"
 [[ -f /etc/os-release ]] || fail "无法识别操作系统。"
 
@@ -46,16 +73,20 @@ ACTUAL_SHA256=$(sha256sum "${PAYLOAD}" | awk '{print $1}')
 info "安装 Python 3 和 libsodium 依赖……"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3 libsodium23 openssl ca-certificates iproute2
+    python3 libsodium23 openssl ca-certificates iproute2 curl
 
 read -r -p "SSR 端口 [443]: " SSR_PORT
 SSR_PORT=${SSR_PORT:-443}
 [[ ${SSR_PORT} =~ ^[0-9]+$ ]] || fail "端口只能填写数字。"
 (( SSR_PORT >= 1 && SSR_PORT <= 65535 )) || fail "端口范围必须是 1-65535。"
 
-read -r -p "客户端连接地址（服务器公网 IPv4 或域名）: " SSR_ADDRESS
-[[ ${SSR_ADDRESS} =~ ^[A-Za-z0-9.-]+$ ]] || \
-    fail "连接地址只能填写公网 IPv4 或域名，不要包含 http://、端口或路径。"
+if SSR_ADDRESS=$(detect_public_ipv4); then
+    info "用于生成客户端链接的公网 IPv4：${SSR_ADDRESS}"
+else
+    read -r -p "未能自动检测客户端链接地址，请填写服务器公网 IPv4 或域名: " SSR_ADDRESS
+    [[ ${SSR_ADDRESS} =~ ^[A-Za-z0-9.-]+$ ]] || \
+        fail "连接地址只能填写公网 IPv4 或域名，不要包含 http://、端口或路径。"
+fi
 
 read -r -s -p "SSR 密码（留空则自动生成）: " SSR_PASSWORD
 echo
@@ -161,6 +192,8 @@ fi
 
 info "SSR 安装成功。"
 echo "服务状态：$(systemctl is-active "${SERVICE_NAME}")"
+echo "服务监听：0.0.0.0:${SSR_PORT}（所有 IPv4 网卡）"
+echo "客户端链接地址：${SSR_ADDRESS}（仅用于生成链接）"
 echo "端口：${SSR_PORT}"
 echo "加密：chacha20-ietf"
 echo "协议：auth_sha1_v4"
