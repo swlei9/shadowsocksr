@@ -38,12 +38,29 @@ cd ssr-offline-installer
 bash install.sh
 ```
 
-SSR 服务始终监听 `0.0.0.0`（所有 IPv4 网卡），不需要把公网 IP 写进服务配置。
-安装脚本会自动检测公网 IPv4，仅用于生成客户端 `ssr://` 链接；只有检测失败时，
-才会要求手动填写公网 IPv4 或域名。脚本还会询问端口、密码及是否开启 UDP，密码
-留空时会自动生成。
+SSR 服务同时监听 `0.0.0.0`（所有 IPv4 网卡）和 `::`（所有 IPv6 网卡），不需要
+把公网 IP 写进服务配置。安装脚本会先检测公网 IPv4；没有公网 IPv4 时自动检测并
+使用公网 IPv6，同时开启 IPv6 DNS 解析。两者都检测失败时，才会要求手动填写
+公网 IPv4、IPv6 或域名。脚本还会询问端口、密码及是否开启 UDP，密码留空时会
+自动生成。
 
 安装成功后会自动输出完整的 `ssr://` 链接，可以直接复制到支持 SSR 链接导入的客户端。
+
+### 纯 IPv6 VPS
+
+纯 IPv6 VPS 可以使用同一条安装命令。请先确认系统能够通过 IPv6 访问软件源，
+以及 GitHub Raw 或下方的备用 CDN。脚本会自动识别纯 IPv6 网络并生成使用
+`[IPv6]:端口` 格式的标准 SSR 链接。考虑到部分旧客户端不能正确解析 IPv6
+字面量，更推荐给 VPS 配置一个 AAAA 域名，然后执行 `ssr-link 你的域名` 生成
+兼容性更好的链接。
+
+如果纯 IPv6 网络无法访问 `raw.githubusercontent.com`，可以通过备用 CDN 启动：
+
+```bash
+bash <(curl -6 -fsSL https://cdn.jsdelivr.net/gh/swlei9/shadowsocksr@manyuser/install-online.sh)
+```
+
+入口脚本下载离线包时也会自动在 GitHub Raw 和备用 CDN 之间切换。
 
 ## 常用命令
 
@@ -75,7 +92,7 @@ ssr-link
 如果服务器公网 IP 或域名发生变化，可以临时指定新地址：
 
 ```bash
-ssr-link 新公网IP或新域名
+ssr-link 新公网IPv4或新公网IPv6或新域名
 ```
 
 `ssr://` 链接中包含经过编码但未加密的密码。不要把链接发到公开群聊、网页或公开仓库。

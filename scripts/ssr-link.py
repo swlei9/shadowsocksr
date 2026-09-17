@@ -3,7 +3,9 @@
 
 import argparse
 import base64
+import ipaddress
 import json
+import re
 from pathlib import Path
 
 
@@ -25,15 +27,40 @@ def load_address(argument):
     return DEFAULT_ADDRESS.read_text(encoding="utf-8").strip()
 
 
+def normalize_address(value):
+    address = value.strip()
+    if address.startswith("[") and address.endswith("]"):
+        address = address[1:-1]
+
+    try:
+        parsed = ipaddress.ip_address(address)
+        return parsed.compressed, parsed.version
+    except ValueError:
+        pass
+
+    address = address.rstrip(".").lower()
+    labels = address.split(".")
+    valid_label = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
+    if (
+        not address
+        or len(address) > 253
+        or address.replace(".", "").isdigit()
+        or any(not valid_label.fullmatch(label) or len(label) > 63 for label in labels)
+    ):
+        raise SystemExit(
+            "连接地址格式错误：请填写 IPv4、IPv6 或域名，不要包含协议、端口或路径"
+        )
+    return address, None
+
+
 def main():
     parser = argparse.ArgumentParser(description="生成当前 SSR 配置的 ssr:// 链接")
-    parser.add_argument("address", nargs="?", help="服务器公网 IPv4 或域名")
+    parser.add_argument("address", nargs="?", help="服务器公网 IPv4、IPv6 或域名")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="SSR JSON 配置文件")
     args = parser.parse_args()
 
-    address = load_address(args.address)
-    if not address or any(character in address for character in ":/ \t\r\n"):
-        raise SystemExit("连接地址格式错误：请填写公网 IPv4 或域名，不要包含协议、端口或路径")
+    address, ip_version = normalize_address(load_address(args.address))
+    uri_address = f"[{address}]" if ip_version == 6 else address
 
     with open(args.config, "r", encoding="utf-8") as config_file:
         config = json.load(config_file)
@@ -49,7 +76,7 @@ def main():
     remarks = base64_url("SSR-" + address)
 
     plain = (
-        f"{address}:{int(config['server_port'])}:{config['protocol']}:"
+        f"{uri_address}:{int(config['server_port'])}:{config['protocol']}:"
         f"{config['method']}:{config['obfs']}:{password}/?"
         f"obfsparam={obfs_param}&protoparam={protocol_param}&remarks={remarks}"
     )

@@ -34,6 +34,50 @@ is_ipv4() {
     done
 }
 
+is_ipv6() {
+    python3 - "${1}" <<'PY'
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.ip_address(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if address.version == 6 else 1)
+PY
+}
+
+normalize_client_address() {
+    python3 - "${1}" <<'PY'
+import ipaddress
+import re
+import sys
+
+address = sys.argv[1].strip()
+if address.startswith("[") and address.endswith("]"):
+    address = address[1:-1]
+
+try:
+    print(ipaddress.ip_address(address).compressed)
+    raise SystemExit(0)
+except ValueError:
+    pass
+
+address = address.rstrip(".").lower()
+if len(address) > 253 or not address or address.replace(".", "").isdigit():
+    raise SystemExit(1)
+labels = address.split(".")
+if any(
+    not label
+    or len(label) > 63
+    or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
+    for label in labels
+):
+    raise SystemExit(1)
+print(address)
+PY
+}
+
 detect_public_ipv4() {
     local endpoint
     local candidate
@@ -43,6 +87,22 @@ detect_public_ipv4() {
         "https://ifconfig.me/ip"; do
         candidate=$(curl -4 -fsS --connect-timeout 4 --max-time 8 "${endpoint}" 2>/dev/null | tr -d '[:space:]') || true
         if is_ipv4 "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+detect_public_ipv6() {
+    local endpoint
+    local candidate
+    for endpoint in \
+        "https://api6.ipify.org" \
+        "https://ipv6.icanhazip.com" \
+        "https://ifconfig.co/ip"; do
+        candidate=$(curl -6 -fsS --connect-timeout 4 --max-time 8 "${endpoint}" 2>/dev/null | tr -d '[:space:]') || true
+        if is_ipv6 "${candidate}"; then
             printf '%s\n' "${candidate}"
             return 0
         fi
@@ -80,12 +140,33 @@ SSR_PORT=${SSR_PORT:-443}
 [[ ${SSR_PORT} =~ ^[0-9]+$ ]] || fail "端口只能填写数字。"
 (( SSR_PORT >= 1 && SSR_PORT <= 65535 )) || fail "端口范围必须是 1-65535。"
 
-if SSR_ADDRESS=$(detect_public_ipv4); then
+PUBLIC_IPV4=$(detect_public_ipv4 || true)
+PUBLIC_IPV6=$(detect_public_ipv6 || true)
+
+if [[ -n ${PUBLIC_IPV4} ]]; then
+    SSR_ADDRESS=${PUBLIC_IPV4}
+    DNS_IPV6=false
     info "用于生成客户端链接的公网 IPv4：${SSR_ADDRESS}"
+elif [[ -n ${PUBLIC_IPV6} ]]; then
+    SSR_ADDRESS=${PUBLIC_IPV6}
+    DNS_IPV6=true
+    info "未检测到公网 IPv4，已切换为纯 IPv6 模式。"
+    info "用于生成客户端链接的公网 IPv6：${SSR_ADDRESS}"
 else
-    read -r -p "未能自动检测客户端链接地址，请填写服务器公网 IPv4 或域名: " SSR_ADDRESS
-    [[ ${SSR_ADDRESS} =~ ^[A-Za-z0-9.-]+$ ]] || \
-        fail "连接地址只能填写公网 IPv4 或域名，不要包含 http://、端口或路径。"
+    DNS_IPV6=false
+    read -r -p "未能自动检测公网地址，请填写服务器公网 IPv4、IPv6 或域名: " SSR_ADDRESS
+fi
+
+SSR_ADDRESS=$(normalize_client_address "${SSR_ADDRESS}") || \
+    fail "连接地址格式错误，请填写 IPv4、IPv6 或域名，不要包含协议、端口或路径。"
+
+if [[ -z ${PUBLIC_IPV4} ]] && {
+    [[ -n ${PUBLIC_IPV6} ]] \
+        || is_ipv6 "${SSR_ADDRESS}" \
+        || { ! ip -4 route get 1.1.1.1 >/dev/null 2>&1 \
+             && ip -6 route get 2606:4700:4700::1111 >/dev/null 2>&1; }
+}; then
+    DNS_IPV6=true
 fi
 
 read -r -s -p "SSR 密码（留空则自动生成）: " SSR_PASSWORD
@@ -165,7 +246,7 @@ printf '%s\n' \
     '    "obfs": "plain",' \
     '    "obfs_param": "",' \
     '    "redirect": "",' \
-    '    "dns_ipv6": false,' \
+    "    \"dns_ipv6\": ${DNS_IPV6}," \
     '    "fast_open": false,' \
     "    \"udp_enabled\": ${UDP_ENABLED}," \
     '    "workers": 1' \
@@ -193,6 +274,7 @@ fi
 info "SSR 安装成功。"
 echo "服务状态：$(systemctl is-active "${SERVICE_NAME}")"
 echo "服务监听：0.0.0.0:${SSR_PORT}（所有 IPv4 网卡）"
+echo "服务监听：[::]:${SSR_PORT}（所有 IPv6 网卡）"
 echo "客户端链接地址：${SSR_ADDRESS}（仅用于生成链接）"
 echo "端口：${SSR_PORT}"
 echo "加密：chacha20-ietf"
