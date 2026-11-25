@@ -13,6 +13,7 @@ readonly PAYLOAD="${PACKAGE_DIR}/payload/shadowsocksr-3.2.2-py3.tar.gz"
 readonly PAYLOAD_SHA256="8e59b55336281d53b0b3bb7265b175da6be0f80285ae53f4c52f4dce83fc4baf"
 readonly UNIT_SOURCE="${PACKAGE_DIR}/systemd/shadowsocks-r.service"
 readonly LINK_SOURCE="${PACKAGE_DIR}/scripts/ssr-link.py"
+readonly MANAGER_SOURCE="${PACKAGE_DIR}/scripts/ssr.py"
 
 fail() {
     echo "[错误] $*" >&2
@@ -32,6 +33,37 @@ is_ipv4() {
     for octet in "${octets[@]}"; do
         (( 10#${octet} <= 255 )) || return 1
     done
+}
+
+select_option() {
+    local prompt=$1
+    local default_value=$2
+    shift 2
+    local -a options=("$@")
+    local answer option index
+
+    echo "${prompt}" >&2
+    for index in "${!options[@]}"; do
+        printf '  %2d) %s\n' "$((index + 1))" "${options[index]}" >&2
+    done
+    read -r -p "请选择编号或名称 [${default_value}]: " answer
+    answer=${answer:-${default_value}}
+
+    if [[ ${answer} =~ ^[0-9]+$ ]]; then
+        (( answer >= 1 && answer <= ${#options[@]} )) || \
+            fail "${prompt} 的编号范围必须是 1-${#options[@]}。"
+        printf '%s\n' "${options[answer - 1]}"
+        return 0
+    fi
+
+    for option in "${options[@]}"; do
+        if [[ ${answer} == "${option}" ]]; then
+            printf '%s\n' "${option}"
+            return 0
+        fi
+    done
+
+    fail "不支持的选项：${answer}"
 }
 
 detect_public_ipv4() {
@@ -68,6 +100,7 @@ command -v systemctl >/dev/null 2>&1 || fail "当前系统没有 systemd/systemc
 [[ -f "${LINK_SOURCE}" ]] || fail "缺少 SSR 链接生成程序：${LINK_SOURCE}"
 
 ACTUAL_SHA256=$(sha256sum "${PAYLOAD}" | awk '{print $1}')
+[[ -f "${MANAGER_SOURCE}" ]] || fail "缺少 SSR 管理程序：${MANAGER_SOURCE}"
 [[ ${ACTUAL_SHA256} == "${PAYLOAD_SHA256}" ]] || fail "程序包校验失败，文件可能损坏或被修改。"
 
 info "安装 Python 3 和 libsodium 依赖……"
@@ -77,8 +110,26 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 
 read -r -p "SSR 端口 [443]: " SSR_PORT
 SSR_PORT=${SSR_PORT:-443}
-[[ ${SSR_PORT} =~ ^[0-9]+$ ]] || fail "端口只能填写数字。"
+[[ ${SSR_PORT} =~ ^[0-9]{1,5}$ ]] || fail "端口只能填写 1-5 位数字。"
+SSR_PORT=$((10#${SSR_PORT}))
 (( SSR_PORT >= 1 && SSR_PORT <= 65535 )) || fail "端口范围必须是 1-65535。"
+
+SSR_METHOD=$(select_option "SSR 加密方式" "chacha20-ietf" \
+    "chacha20-ietf" \
+    "chacha20" \
+    "aes-256-cfb" \
+    "aes-128-cfb" \
+    "aes-256-ctr" \
+    "aes-128-ctr" \
+    "salsa20")
+
+SSR_PROTOCOL=$(select_option "SSR 协议" "auth_sha1_v4" \
+    "auth_sha1_v4" \
+    "auth_aes128_md5" \
+    "auth_aes128_sha1" \
+    "auth_chain_a" \
+    "auth_chain_b" \
+    "origin")
 
 if SSR_ADDRESS=$(detect_public_ipv4); then
     info "用于生成客户端链接的公网 IPv4：${SSR_ADDRESS}"
@@ -88,8 +139,7 @@ else
         fail "连接地址只能填写公网 IPv4 或域名，不要包含 http://、端口或路径。"
 fi
 
-read -r -s -p "SSR 密码（留空则自动生成）: " SSR_PASSWORD
-echo
+read -r -p "SSR 密码（明文显示，留空则自动生成）: " SSR_PASSWORD
 if [[ -z ${SSR_PASSWORD} ]]; then
     SSR_PASSWORD=$(openssl rand -hex 16)
     GENERATED_PASSWORD=true
@@ -159,8 +209,8 @@ printf '%s\n' \
     '    "local_port": 1080,' \
     "    \"password\": \"${SSR_PASSWORD}\"," \
     '    "timeout": 120,' \
-    '    "method": "chacha20-ietf",' \
-    '    "protocol": "auth_sha1_v4",' \
+    "    \"method\": \"${SSR_METHOD}\"," \
+    "    \"protocol\": \"${SSR_PROTOCOL}\"," \
     '    "protocol_param": "",' \
     '    "obfs": "plain",' \
     '    "obfs_param": "",' \
@@ -180,6 +230,7 @@ python3 -m json.tool "${CONFIG_FILE}" >/dev/null
 python3 "${INSTALL_DIR}/server.py" -h >/dev/null
 install -o root -g root -m 0644 "${UNIT_SOURCE}" "${SERVICE_FILE}"
 install -o root -g root -m 0755 "${LINK_SOURCE}" /usr/local/bin/ssr-link
+install -o root -g root -m 0755 "${MANAGER_SOURCE}" /usr/local/bin/ssr
 
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}"
@@ -195,17 +246,18 @@ echo "服务状态：$(systemctl is-active "${SERVICE_NAME}")"
 echo "服务监听：0.0.0.0:${SSR_PORT}（所有 IPv4 网卡）"
 echo "客户端链接地址：${SSR_ADDRESS}（仅用于生成链接）"
 echo "端口：${SSR_PORT}"
-echo "加密：chacha20-ietf"
-echo "协议：auth_sha1_v4"
+echo "加密：${SSR_METHOD}"
+echo "协议：${SSR_PROTOCOL}"
 echo "混淆：plain"
 echo "UDP：${UDP_ENABLED}"
 if [[ ${GENERATED_PASSWORD} == true ]]; then
     echo "自动生成的密码：${SSR_PASSWORD}"
     echo "请立即保存该密码；配置文件不会向其他用户开放。"
 else
-    echo "密码：使用你刚才输入的密码（此处不回显）"
+    echo "密码：${SSR_PASSWORD}"
 fi
 echo "SSR 链接："
 /usr/local/bin/ssr-link
 echo
+echo "管理菜单：运行 ssr（修改端口、密码，启停、重启、查看日志等）"
 echo "请仅在云服务商防火墙中放行 TCP ${SSR_PORT}；只有启用 UDP 时才放行 UDP ${SSR_PORT}。"

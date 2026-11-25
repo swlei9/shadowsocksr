@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 readonly PACKAGE_URL="https://raw.githubusercontent.com/swlei9/shadowsocksr/manyuser/ssr-offline-installer.tar.gz"
-readonly PACKAGE_SHA256="965514ec4074ea3eb47ede65b37cad46ebf0fc7ab8a58652b667095558b94570"
+readonly PACKAGE_SHA256="d57914be57e7bfa46768e3b1934eb2141d684271c808886772dfd943c263bff3"
 
 fail() {
     echo "[错误] $*" >&2

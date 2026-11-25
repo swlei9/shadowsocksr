@@ -13,3 +13,6 @@ headers. Local compatibility and operational changes are documented in
 `README.md`. The package also includes a local `ssr-link` helper that reads the
 installed configuration and generates a standard SSR client URI without
 sending configuration data to an external service.
+
+The local `ssr` management menu supports configuration changes and systemd
+service operations, with a configuration backup and rollback on restart failure.
